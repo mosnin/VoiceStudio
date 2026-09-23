@@ -38,6 +38,33 @@ def _disk_free_gb(path: str) -> float:
 
 # ── Setup Status ───────────────────────────────────────────────────────────
 
+def _selected_tts_ready() -> bool:
+    """A loaded, available selected engine satisfies first-run speech readiness.
+
+    Discovery must never load or download a model. A catalog entry or installed
+    Python package alone does not establish that a speech engine is ready.
+    """
+    try:
+        from services import tts_backend
+
+        selected = tts_backend.active_backend_id()
+        # Do not enumerate/probe every optional engine on the wizard's polling
+        # path. Read resident instances only; discovery must not import runtimes
+        # concurrently with an active synthesis.
+        instances = list(tts_backend._ENGINE_INSTANCES.values())
+        if tts_backend._active_instance_id == selected:
+            instances.append(tts_backend._active_instance)
+        return any(
+            instance is not None
+            and getattr(instance, "id", None) == selected
+            and instance.execution_evidence_loaded()
+            for instance in instances
+        )
+    except Exception:
+        logger.debug("Selected TTS readiness unavailable", exc_info=True)
+        return False
+
+
 @router.get("/setup/status", response_model=SetupStatusResponse)
 def setup_status():
     """Snapshot the setup state so the client can pick its boot screen."""
@@ -46,6 +73,8 @@ def setup_status():
         for (rid, label) in REQUIRED_MODELS
         if not is_cached(rid)
     ]
+    if missing and _selected_tts_ready():
+        missing = []
     cache = hf_cache_dir()
     free_gb = _disk_free_gb(cache)
     return {
